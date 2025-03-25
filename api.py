@@ -1,52 +1,104 @@
 import os
+import argparse
+import asyncio
+import datetime
+import re
 from telethon import TelegramClient, events
+from telethon.tl.types import DocumentAttributeFilename
 
-# Telegram API credentials (from https://my.telegram.org/apps)
-API_ID = 25984339
-API_HASH = "cbdceb42b060579bfceb1b847d318c6a"
-SESSION_NAME = "telegram_video_downloader"
-client = TelegramClient(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
+# Load defaults from environment variables
+DEFAULT_API_ID = int(os.getenv("TELEGRAM_BOT_API_ID", 0))
+DEFAULT_API_HASH = os.getenv("TELEGRAM_BOT_API_HASH", "")
+DEFAULT_DOWNLOAD_FOLDER = os.getenv("TELEGRAM_BOT_DL_FOLDER", "downloads")
+DEFAULT_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-# Folder to save videos
-DOWNLOAD_FOLDER = "/media/hd_media/Downloads/Incoming/files/Telegram"
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+def parse_args():
+    """Parses command-line arguments."""
+    parser = argparse.ArgumentParser(description="Telegram Video Downloader Bot")
+    parser.add_argument("--api-id", type=int, default=DEFAULT_API_ID, help="Telegram API ID (default: from env)")
+    parser.add_argument("--api-hash", type=str, default=DEFAULT_API_HASH, help="Telegram API Hash (default: from env)")
+    parser.add_argument("--download-folder", type=str, default=DEFAULT_DOWNLOAD_FOLDER, help="Download folder (default: from env)")
+    parser.add_argument("--bot-token", type=str, default=DEFAULT_BOT_TOKEN, help="Telegram Bot Token (default: from env)")
+    return parser.parse_args()
+
+def sanitize_filename(name):
+    """Sanitizes the filename to be filesystem-friendly while keeping spaces."""
+    name = re.sub(r'[<>:"/\\|?*]', '_', name)  # Replace forbidden characters
+    name = name.strip()  # Remove trailing spaces
+    return name[:100]  # Limit length to 100 characters
+
+def get_file_extension(event):
+    """Extracts the file extension from the original filename, if available."""
+    if event.document and event.document.attributes:
+        for attr in event.document.attributes:
+            if isinstance(attr, DocumentAttributeFilename):
+                return os.path.splitext(attr.file_name)[1]  # Extract file extension
+    return ".mp4"  # Default fallback
 
 async def progress_callback(current, total, event, sender_id, msg):
-    """Sends progress updates to the user."""
+    """Updates the user on download progress."""
     percent = int(current / total * 100)
-    
     if percent % 2 == 0:
         new_text = f"⬇ Downloading... {percent}% ({current / 1024 / 1024:.2f} MB / {total / 1024 / 1024:.2f} MB)"
         try:
-            await client.edit_message(sender_id, msg.id, new_text)  # Update progress
+            await client.edit_message(sender_id, msg.id, new_text)
         except:
-            pass  # Ignore errors if Telegram rate-limits updates
+            pass  # Ignore if Telegram rate-limits updates
 
-@client.on(events.NewMessage(incoming=True))
+async def download_worker():
+    """Processes video downloads one by one from the queue."""
+    while True:
+        event = await download_queue.get()
+        if event.video or event.document:
+            sender = await event.get_sender()
+            sender_id = sender.id
+
+            # Get filename from message text or default to timestamp
+            if event.message.text:
+                filename = sanitize_filename(event.message.text)
+            else:
+                filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+            file_extension = get_file_extension(event)
+            file_path = os.path.join(args.download_folder, f"{filename}{file_extension}")
+
+            # Notify user that the download has started, save the message to update it later
+            msg = await client.send_message(sender_id, f"⬇ Downloading `{filename}{file_extension}`...")
+
+            print(f"Downloading video: {filename}{file_extension}...")
+            await event.download_media(
+                file=file_path,
+                progress_callback=lambda current, total: progress_callback(current, total, event, sender_id, msg)
+            )
+
+            print(f"✅ Video saved: {file_path}")
+            await client.edit_message(sender_id, msg.id, f"✅ Download complete: `{file_path}`")
+
+        download_queue.task_done()
+
 async def handle_video(event):
-    """Handles incoming video messages and downloads them."""
-    if event.video:  # Check if the message contains a video
-        sender = await event.get_sender()
-        sender_id = sender.id
+    """Adds incoming videos to the download queue."""
+    await download_queue.put(event)
+    print(f"📥 Queued video for download. Queue size: {download_queue.qsize()}")
 
-        # Extract filename from the message caption (if available)
-        filename = event.message.text or "video"
-        filename = filename.replace(" ", "_")  # Replace spaces with underscores
+async def main(client, token):
+    """Starts the bot and the download worker."""
+    asyncio.create_task(download_worker())
+    await client.start(bot_token=token)  # Start bot with bot token
+    client.add_event_handler(handle_video, events.NewMessage(incoming=True))
+    print("Listening for videos...")
+    await client.run_until_disconnected()
 
-        # Send initial message
-        msg = await client.send_message(sender_id, f"⬇ Download started for `{filename}`...")
+if __name__ == "__main__":
+    args = parse_args()
+    os.makedirs(args.download_folder, exist_ok=True)  # Ensure download folder exists
 
-        print(f"Downloading video: {filename}...")
-        file_path = await event.download_media(
-            file=f"{DOWNLOAD_FOLDER}/{filename}.mp4",  # Save using extracted filename
-            progress_callback=lambda current, total: progress_callback(current, total, event, sender_id, msg)
-        )
-        print(f"Video saved: {file_path}")
+    # Initialize Telegram client
+    SESSION_NAME = "user_session"
+    client = TelegramClient(SESSION_NAME, api_id=args.api_id, api_hash=args.api_hash)
 
-        # Notify the user when the download is complete
-        await client.edit_message(sender_id, msg.id, f"✅ Download complete: `{file_path}`")
+    # Queue for sequential downloads
+    download_queue = asyncio.Queue()
 
+    asyncio.get_event_loop().run_until_complete(main(client, args.bot_token))
 
-client.start()  # Uses saved session, no login required
-print("Listening for videos...")
-client.run_until_disconnected()
