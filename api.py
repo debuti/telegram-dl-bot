@@ -21,77 +21,94 @@ def parse_args():
     parser.add_argument("--bot-token", type=str, default=DEFAULT_BOT_TOKEN, help="Telegram Bot Token (default: from env)")
     return parser.parse_args()
 
-def sanitize_filename(name):
-    """Sanitizes the filename to be filesystem-friendly while keeping spaces."""
-    name = re.sub(r'[<>:"/\\|?*]', '_', name)  # Replace forbidden characters
-    name = name.strip()  # Remove trailing spaces
-    return name[:100]  # Limit length to 100 characters
-
-def get_file_extension(event):
-    """Extracts the file extension from the original filename, if available."""
-    if event.document and event.document.attributes:
-        for attr in event.document.attributes:
-            if isinstance(attr, DocumentAttributeFilename):
-                return os.path.splitext(attr.file_name)[1]  # Extract file extension
-    return ".mp4"  # Default fallback
-
-async def progress_callback(current, total, event, sender_id, msg):
+async def progress_callback(current, total, sender, msg, client, file_name):
     """Updates the user on download progress."""
     percent = int(current / total * 100)
-    if percent % 2 == 0:
-        new_text = f"⬇ Downloading... {percent}% ({current / 1024 / 1024:.2f} MB / {total / 1024 / 1024:.2f} MB)"
+    if percent % 5 == 0: 
+        new_text = f"⬇ Downloading: \"{file_name}\"... {percent}% ({current / 1024 / 1024:.2f} MB / {total / 1024 / 1024:.2f} MB)"
         try:
-            await client.edit_message(sender_id, msg.id, new_text)
-        except:
-            pass  # Ignore if Telegram rate-limits updates
+            await client.edit_message(sender.id, msg.id, new_text)
+        except: pass  # Ignore if Telegram rate-limits updates
 
 async def download_worker():
     """Processes video downloads one by one from the queue."""
     while True:
-        event = await download_queue.get()
-        if event.video or event.document:
-            sender = await event.get_sender()
-            sender_id = sender.id
+        (event, sender, (file_name, file_path), msg) = await download_queue.get()
 
-            # Get filename from message text or default to timestamp
-            if event.message.text:
-                filename = sanitize_filename(event.message.text)
-            else:
-                filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        body = f"Downloading: \"{file_name}\"..."
+        print(body)
+        try:
+            await client.edit_message(sender.id, msg.id, body)
+        except: pass  # Ignore if Telegram rate-limits updates
+   
+        await event.download_media(
+            file=file_path,
+            progress_callback=lambda current, total: progress_callback(current, total, sender, msg, client, file_name)
+        )
 
-            file_extension = get_file_extension(event)
-            file_path = os.path.join(args.download_folder, f"{filename}{file_extension}")
-
-            # Notify user that the download has started, save the message to update it later
-            msg = await client.send_message(sender_id, f"⬇ Downloading `{filename}{file_extension}`...")
-
-            print(f"Downloading video: {filename}{file_extension}...")
-            await event.download_media(
-                file=file_path,
-                progress_callback=lambda current, total: progress_callback(current, total, event, sender_id, msg)
-            )
-
-            print(f"✅ Video saved: {file_path}")
-            await client.edit_message(sender_id, msg.id, f"✅ Download complete: `{file_path}`")
+        body = f"✅ Download complete: `{file_path}`"
+        print(body)
+        try:
+            await client.edit_message(sender.id, msg.id, body)
+        except: pass  # Ignore if Telegram rate-limits updates
 
         download_queue.task_done()
 
 async def handle_video(event):
     """Adds incoming videos to the download queue."""
-    await download_queue.put(event)
-    print(f"📥 Queued video for download. Queue size: {download_queue.qsize()}")
+
+    def sanitize_filename(name):
+        """Sanitizes the filename to be filesystem-friendly while keeping spaces."""
+        name = re.sub(r'[<>:"/\\|?*]', '_', name)
+        name = name.strip()
+        return name[:100]
+
+    def get_file_extension(event):
+        """Extracts the file extension from the original filename, if available."""
+        if event.document and event.document.attributes:
+            for attr in event.document.attributes:
+                if isinstance(attr, DocumentAttributeFilename):
+                    return os.path.splitext(attr.file_name)[1]  # Extract file extension
+        return ".mp4"  # Default fallback
+
+    if event.video or event.document:
+        sender = await event.get_sender()
+
+        if event.message.text:
+            filename = sanitize_filename(event.message.text)
+        else:
+            filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_extension = get_file_extension(event)
+        file_name = f"{filename}{file_extension}"
+        file_path = os.path.join(args.download_folder, file_name)
+
+        body = f"📥 Queued {file_name} for download. Queue size: {download_queue.qsize() + 1}"
+        print(body)
+        try:
+            msg = await client.send_message(sender.id, body)
+        except: pass  # Ignore if Telegram rate-limits updates
+
+        await download_queue.put((event, sender, (file_name, file_path), msg))
+    else:
+        body = f"🗙 Unable to manage message, send videos or documents."
+        print(body)
+        try:
+            await client.send_message(sender.id, body)
+        except: pass  # Ignore if Telegram rate-limits updates
+
 
 async def main(client, token):
     """Starts the bot and the download worker."""
     asyncio.create_task(download_worker())
-    await client.start(bot_token=token)  # Start bot with bot token
+    await client.start(bot_token=token)
     client.add_event_handler(handle_video, events.NewMessage(incoming=True))
     print("Listening for videos...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
     args = parse_args()
-    os.makedirs(args.download_folder, exist_ok=True)  # Ensure download folder exists
+    
+    os.makedirs(args.download_folder, exist_ok=True)
 
     # Initialize Telegram client
     SESSION_NAME = "user_session"
