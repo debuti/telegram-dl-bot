@@ -25,10 +25,11 @@ async def progress_callback(current, total, sender, msg, client, file_name):
     """Updates the user on download progress."""
     percent = int(current / total * 100)
     if percent % 5 == 0: 
-        new_text = f"⬇ Downloading: \"{file_name}\"... {percent}% ({current / 1024 / 1024:.2f} MB / {total / 1024 / 1024:.2f} MB)"
+        body = f"⬇ Downloading: \"{file_name}\"... {percent}% ({current / 1024 / 1024:.2f} MB / {total / 1024 / 1024:.2f} MB)"
         try:
-            await client.edit_message(sender.id, msg.id, new_text)
-        except: pass  # Ignore if Telegram rate-limits updates
+            await client.edit_message(sender.id, msg.id, body)
+        except:
+            print (f"Unable to send message: {body}")
 
 async def download_worker():
     """Processes video downloads one by one from the queue."""
@@ -39,7 +40,8 @@ async def download_worker():
         print(body)
         try:
             await client.edit_message(sender.id, msg.id, body)
-        except: pass  # Ignore if Telegram rate-limits updates
+        except:
+            print (f"Unable to send message: {body}")
    
         await event.download_media(
             file=file_path,
@@ -50,7 +52,8 @@ async def download_worker():
         print(body)
         try:
             await client.edit_message(sender.id, msg.id, body)
-        except: pass  # Ignore if Telegram rate-limits updates
+        except:
+            print (f"Unable to send message: {body}")
 
         download_queue.task_done()
 
@@ -82,11 +85,12 @@ async def handle_video(event):
         file_name = f"{filename}{file_extension}"
         file_path = os.path.join(args.download_folder, file_name)
 
-        body = f"📥 Queued {file_name} for download. Queue size: {download_queue.qsize() + 1}"
+        body = f"📥 Queued {file_name} for download."
         print(body)
         try:
             msg = await client.send_message(sender.id, body)
-        except: pass  # Ignore if Telegram rate-limits updates
+        except:
+            print (f"Unable to send message: {body}")
 
         await download_queue.put((event, sender, (file_name, file_path), msg))
     else:
@@ -94,7 +98,8 @@ async def handle_video(event):
         print(body)
         try:
             await client.send_message(sender.id, body)
-        except: pass  # Ignore if Telegram rate-limits updates
+        except:
+            print (f"Unable to send message: {body}")
 
 
 async def main(client, token):
@@ -111,7 +116,7 @@ if __name__ == "__main__":
     os.makedirs(args.download_folder, exist_ok=True)
 
     # Initialize Telegram client
-    SESSION_NAME = "user_session"
+    SESSION_NAME = "telegram-dl-bot"
     client = TelegramClient(SESSION_NAME, api_id=args.api_id, api_hash=args.api_hash)
 
     # Queue for sequential downloads
