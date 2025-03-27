@@ -44,12 +44,12 @@ You can set your environment variables by creating a `.env` file in the root dir
 # .env file
 
 # Telegram API credentials
-export TELEGRAM_BOT_API_ID=your_api_id
-export TELEGRAM_BOT_API_HASH=your_api_hash
-export TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_BOT_API_ID=your_api_id
+TELEGRAM_BOT_API_HASH=your_api_hash
+TELEGRAM_BOT_TOKEN=your_bot_token
 
 # Default download folder
-export TELEGRAM_BOT_DL_FOLDER=/parth/to/downloads
+TELEGRAM_BOT_DL_FOLDER=/path/to/downloads
 ```
 
 Alternatively, you can set the environment variables manually or through the command line.
@@ -66,7 +66,7 @@ To get an up-to-date list of options run the script with the `-h` flag.
 
 ## Launch on boot
 
-1. Copy the `telegram_dl_bot.service` file to `/etc/systemd/system`
+1. Copy the `telegram-dl-bot.service` file to `/etc/systemd/system`
 2. Update the placeholders
   a. Replace /path/to/api.py with the actual path to your script.
   b. Replace /path/to/ with the working directory where your script is located.
@@ -76,8 +76,8 @@ To get an up-to-date list of options run the script with the `-h` flag.
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable telegram_downloader
-sudo systemctl start telegram_downloader
+sudo systemctl enable telegram-dl-bot.service
+sudo systemctl start telegram-dl-bot.service
 ```
 
 ## License

@@ -1,8 +1,11 @@
+from collections import defaultdict
+import logging
 import os
 import argparse
 import asyncio
 import datetime
 import re
+import time
 from telethon import TelegramClient, events
 from telethon.tl.types import DocumentAttributeFilename
 
@@ -19,6 +22,7 @@ def parse_args():
     parser.add_argument("--api-hash", type=str, default=DEFAULT_API_HASH, help="Telegram API Hash (default: from env)")
     parser.add_argument("--download-folder", type=str, default=DEFAULT_DOWNLOAD_FOLDER, help="Download folder (default: from env)")
     parser.add_argument("--bot-token", type=str, default=DEFAULT_BOT_TOKEN, help="Telegram Bot Token (default: from env)")
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity (use -vv or -vvv for more details)")
     return parser.parse_args()
 
 async def progress_callback(current, total, sender, msg, client, file_name):
@@ -37,7 +41,7 @@ async def download_worker():
         (event, sender, (file_name, file_path), msg) = await download_queue.get()
 
         body = f"Downloading: \"{file_name}\"..."
-        print(body)
+        logging.info(body)
         try:
             await client.edit_message(sender.id, msg.id, body)
         except:
@@ -49,13 +53,21 @@ async def download_worker():
         )
 
         body = f"✅ Download complete: `{file_path}`"
-        print(body)
-        try:
-            await client.edit_message(sender.id, msg.id, body)
-        except:
-            print (f"Unable to send message: {body}")
+        current_wait = 1
+        while True:
+            # Try over and over again until 
+            try:
+                await client.edit_message(sender.id, msg.id, body)
+                break
+            except: 
+                logging.debug(f"Download finished but cant send msg. Waiting {current_wait}s")
+                time.sleep(current_wait)
+                current_wait = current_wait << 1
+        logging.info(body)
 
         download_queue.task_done()
+
+last_msg = defaultdict(lambda: (None))  # {user_id: (timestamp, text)}
 
 async def handle_video(event):
     """Adds incoming videos to the download queue."""
@@ -74,19 +86,32 @@ async def handle_video(event):
                     return os.path.splitext(attr.file_name)[1]  # Extract file extension
         return ".mp4"  # Default fallback
 
+    # Sometimes, when forwarding media to the bot, the message arrives 1st, then the media arrives 2nd
+    if event.text and not event.media:
+        last_msg[event.sender_id] = (datetime.datetime.now().timestamp(), event.text)
+        return  # Store the message and exit
+
     if event.video or event.document:
         sender = await event.get_sender()
 
         if event.message.text:
             filename = sanitize_filename(event.message.text)
+            logging.debug(f"Received filename as caption: {filename}")
+        elif event.sender_id in last_msg:
+            ts, text = last_msg.pop(event.sender_id)
+            if (datetime.datetime.now().timestamp() - ts) <= 5:
+                filename = text
+                logging.debug(f"Received filename as previous message: {filename}")
         else:
             filename = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            logging.debug(f"No filename received, default: {filename}")
+
         file_extension = get_file_extension(event)
         file_name = f"{filename}{file_extension}"
         file_path = os.path.join(args.download_folder, file_name)
 
         body = f"📥 Queued {file_name} for download."
-        print(body)
+        logging.info(body)
         try:
             msg = await client.send_message(sender.id, body)
         except:
@@ -95,7 +120,7 @@ async def handle_video(event):
         await download_queue.put((event, sender, (file_name, file_path), msg))
     else:
         body = f"🗙 Unable to manage message, send videos or documents."
-        print(body)
+        logging.info(body)
         try:
             await client.send_message(sender.id, body)
         except:
@@ -107,12 +132,16 @@ async def main(client, token):
     asyncio.create_task(download_worker())
     await client.start(bot_token=token)
     client.add_event_handler(handle_video, events.NewMessage(incoming=True))
-    print("Listening for videos...")
+    logging.info("Listening for videos...")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
     args = parse_args()
     
+    log_levels = [logging.WARNING, logging.INFO, logging.DEBUG]  # Levels: 0 = WARNING, 1 = INFO, 2+ = DEBUG
+    log_level = log_levels[min(args.verbose, 2)]  # Cap at DEBUG
+    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=log_level)
+
     os.makedirs(args.download_folder, exist_ok=True)
 
     # Initialize Telegram client
