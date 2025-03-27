@@ -68,10 +68,10 @@ To get an up-to-date list of options run the script with the `-h` flag.
 
 1. Copy the `telegram-dl-bot.service` file to `/etc/systemd/system`
 2. Update the placeholders
-    a. Replace /path/to/api.py with the actual path to your script.
-    b. Replace /path/to/ with the working directory where your script is located.
-    c. Replace /path/to/.env with the full path of your .env file.
-    d. Replace your_user with the Linux user that should run the script.
+   a. Replace /path/to/api.py with the actual path to your script.
+   b. Replace /path/to/ with the working directory where your script is located.
+   c. Replace /path/to/.env with the full path of your .env file.
+   d. Replace your_user with the Linux user that should run the script.
 3. Reload systemd and enable the service
 
 ```bash
